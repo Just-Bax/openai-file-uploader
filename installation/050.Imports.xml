@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Import Components that can be used to handle installation files with .csv extensions. 
-     Files with data to import should follow naming convention: <Order Number>.<Import Name>.csv,
-     where the value of <Import Name> matches configured import created on the previous module installation steps
- -->

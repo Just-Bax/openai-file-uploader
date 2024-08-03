@@ -19,6 +19,11 @@
   "required": [
     "ovUrl",
     "ovAccessKey",
-    "ovSecretKey"
+    "ovSecretKey",
+    "openAIApiKey",
+    "trackorType",
+    "fileField",
+    "fileIdField",
+    "loadCheckboxField"
   ]
 }

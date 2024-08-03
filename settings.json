@@ -1,5 +1,10 @@
 {
-  "ovUrl": "",
-  "ovAccessKey": "",
-  "ovSecretKey": ""
+    "ovUrl": "https://",
+    "ovAccessKey": "",
+    "ovSecretKey": "",
+    "openAIApiKey": "",
+    "trackorType": "",
+    "fileField": "",
+    "fileIdField": "",
+    "loadCheckboxField": ""
 }

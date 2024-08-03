@@ -19,5 +19,5 @@
 #
 # https://docs.github.com/en/github/creating-cloning-and-archiving-repositories/about-code-owners#codeowners-syntax
 
-*                                   @akhmatkhonov @asmoiseenko
+*                                   @glebowadim @asmoiseenko
 .*                                  @asmoiseenko

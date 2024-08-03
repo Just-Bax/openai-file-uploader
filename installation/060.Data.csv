@@ -1,2 +1,0 @@
-column1,column2,column3
-"You can use CSV files to import data","CSV file name should be: <Order Number>.<Import Name>.csv","Import <Import Name> must be created on previous module installation steps"
