@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- You can manually add a custom SVG icon for Menu. You need to put your <svg> in <ICON></ICON>.
+     Make sure that the <svg> contains "name" (only English ASCII characters are allowed), "width", and "height" attributes to work correctly, e.g.
+     <svg version="1.1" id="layer_1" name="test" width="20px" height="20px" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 20 20" style="enable-background:new 0 0 20 20;" xml:space="preserve" class="component_icon">
+
+ -->
+<COMPONENTS>
+    <MENU>
+        <MENU_ITEM>
+            <ICON></ICON>
+        </MENU_ITEM>
+    </MENU>
+</COMPONENTS>

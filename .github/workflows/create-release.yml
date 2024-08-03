@@ -1,0 +1,214 @@
+name: Create release
+
+# Required secrets:
+# OV_TRACKOR_AUTOMATION_ACCESS_KEY - Access Key for trackor.onevizion.com
+# OV_TRACKOR_AUTOMATION_SECRET_KEY - Secret Key for trackor.onevizion.com
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 0 * * SAT
+
+permissions:
+  contents: write
+
+env:
+  GIT_USERNAME: 'ov-automation'
+  GIT_EMAIL: 'github-actions@github.com'
+  TRACKOR_URL: https://trackor.onevizion.com
+
+jobs:
+  find_and_validate_changes:
+    name: Find and validate changes
+    runs-on: ubuntu-latest
+    outputs:
+      create_release: ${{ steps.validate_issue_status.outputs.create_release }}
+      issue_rel_notes_json: ${{ toJSON(steps.validate_issue_status.outputs) }}
+      max_major_version_number: ${{ steps.validate_issue_status.outputs.max_major_version_number }}
+      latest_release_ref: ${{ steps.find_latest_release.outputs.latest_release_ref }}
+      latest_release_ref_is_tag: ${{ steps.find_latest_release.outputs.latest_release_ref_is_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find latest release
+        id: find_latest_release
+        run: |
+          GIT_REF="${{ github.ref }}"
+          GIT_BRANCH_NAME="${GIT_REF##refs/heads/}"
+          echo "Branch name: $GIT_BRANCH_NAME"
+
+          LATEST_RELEASE_REF="$(curl --silent \
+            --fail-with-body \
+            -H 'Authorization: Bearer ${{ github.token }}' \
+            'https://api.github.com/repos/${{ github.repository }}/releases?per_page=1000' \
+            | jq -r --arg branchFilter "$GIT_BRANCH_NAME" '[ sort_by(.created_at) | reverse | .[] | select( .target_commitish == $branchFilter ) ] | first | .tag_name')"
+
+          LATEST_RELEASE_REF_IS_TAG="true"
+          if [[ "$LATEST_RELEASE_REF" == "null" ]]; then
+            echo "No any release found, using first commit from ${{ github.ref }}. Will be initial release"
+            LATEST_RELEASE_REF="$(git rev-list --max-parents=0 '${{ github.ref }}' | tail -n 1)"
+            LATEST_RELEASE_REF_IS_TAG="false"
+          fi
+
+          echo "Latest release ref: $LATEST_RELEASE_REF (Is Tag: $LATEST_RELEASE_REF_IS_TAG)"
+          
+          echo "latest_release_ref=$LATEST_RELEASE_REF" >> $GITHUB_OUTPUT
+          echo "latest_release_ref_is_tag=$LATEST_RELEASE_REF_IS_TAG" >> $GITHUB_OUTPUT
+
+      - name: Find Issue IDs
+        id: find_issue_ids
+        env:
+          ISSUE_IDS_FILE: issue_ids.txt
+        run: |
+          while read COMMIT_DESCRIPTION
+          do
+            COMMIT_ID="$(echo "$COMMIT_DESCRIPTION" | cut -d' ' -f2)"
+            ISSUE_ID="$(echo "$COMMIT_DESCRIPTION" | cut -d' ' -f3 | awk '{ if (match($0, /[A-Za-z]{1,32}-[0-9]{1,7}/, m)) { print m[0]; exit }}')"
+
+            if [ -z "$ISSUE_ID" ]; then
+              echo "No Issue ID in $COMMIT_DESCRIPTION"
+              continue
+            fi
+
+            echo "New changes: $COMMIT_ID ($ISSUE_ID)"
+            echo "$ISSUE_ID" >> "$ISSUE_IDS_FILE"
+          done < <(git cherry -v "${{ steps.find_latest_release.outputs.latest_release_ref }}" '${{ github.ref }}')
+
+          COUNTER=1
+          while read ISSUE_ID
+          do
+            echo "issue_id_$COUNTER=$ISSUE_ID" >> $GITHUB_OUTPUT
+            (( COUNTER++ ))
+          done < <(cat "$ISSUE_IDS_FILE" | sort | uniq)
+
+      - name: Validate Issue statuses
+        id: validate_issue_status
+        env:
+          ISSUE_IDS_FILE: issue_ids.json
+          CURL_RESPONSE_FILE: curl_response.txt
+        run: |
+          cat << 'EOF' > "$ISSUE_IDS_FILE"
+          ${{ toJSON(steps.find_issue_ids.outputs) }}
+          EOF
+
+          export COUNTER=1
+          export ALLOW_CREATE_RELEASE=1
+          export MAX_MAJOR_VERSION="1"
+
+          while read ISSUE_ID
+          do
+            curl --silent \
+              --fail-with-body \
+              -H 'Authorization: Bearer ${{ secrets.OV_TRACKOR_AUTOMATION_ACCESS_KEY }}:${{ secrets.OV_TRACKOR_AUTOMATION_SECRET_KEY }}' \
+              "$TRACKOR_URL/api/v3/trackor_types/Issue/trackors?fields=VQS_IT_XITOR_NAME,VQS_IT_STATUS,Version.TRACKOR_KEY&TRACKOR_KEY=$ISSUE_ID" > "$CURL_RESPONSE_FILE"
+
+            ARRAY_LENGTH="$(cat "$CURL_RESPONSE_FILE" | jq -r 'length')"
+            if [ "$ARRAY_LENGTH" -gt 1 ]; then
+              echo "::error::$ISSUE_ID have multiple versions assigned?"
+              cat "$CURL_RESPONSE_FILE"
+              ALLOW_CREATE_RELEASE="0"
+            fi
+
+            ISSUE_SUMMARY="$(cat "$CURL_RESPONSE_FILE" | jq -r 'first | .VQS_IT_XITOR_NAME')"
+            ISSUE_STATUS="$(cat "$CURL_RESPONSE_FILE" | jq -r 'first | .VQS_IT_STATUS')"
+            ISSUE_VERSION="$(cat "$CURL_RESPONSE_FILE" | jq -r 'first | ."Version.TRACKOR_KEY"')"
+            echo "$ISSUE_ID. Summary: [$ISSUE_SUMMARY], Status: [$ISSUE_STATUS], Version: [$ISSUE_VERSION]"
+
+            if [[ "$ISSUE_STATUS" != "Completed" ]] && [[ "$ISSUE_STATUS" != "Completion Review" ]]; then
+              echo "::error::Wrong $ISSUE_ID status ($ISSUE_STATUS), should be 'Completed' or 'Completion Review'"
+              ALLOW_CREATE_RELEASE="0"
+            fi
+          
+            ISSUE_VERSION_MAJOR="$(echo "$ISSUE_VERSION" | cut -d'.' -f1)"
+            MAX_MAJOR_VERSION="$(( ISSUE_VERSION_MAJOR > MAX_MAJOR_VERSION ? ISSUE_VERSION_MAJOR : MAX_MAJOR_VERSION ))"
+
+            echo "issue_rel_notes_$COUNTER=[$ISSUE_ID]($TRACKOR_URL/trackor_types/Issue/trackors.do?key=$ISSUE_ID) $ISSUE_SUMMARY" >> $GITHUB_OUTPUT
+            (( COUNTER++ ))
+          done < <(cat "$ISSUE_IDS_FILE" | jq -r 'to_entries[] | select(.key | startswith("issue_id_")) | .value')
+
+          if [ "$ALLOW_CREATE_RELEASE" -eq 1 ]; then
+            echo '::notice::All issues have Completed/Completion Review status, allowing to create release'
+          else
+            echo '::notice::Having issues with wrong status'
+            exit 1
+          fi
+
+          echo "Max major version found: $MAX_MAJOR_VERSION"
+          echo "max_major_version_number=$MAX_MAJOR_VERSION" >> $GITHUB_OUTPUT
+
+  create_release:
+    name: Create release
+    needs: find_and_validate_changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get new version
+        id: get_new_version
+        run: |
+          MAJOR_VERSION_NEW="${{ needs.find_and_validate_changes.outputs.max_major_version_number }}"
+          echo "New major version: $MAJOR_VERSION_NEW"
+
+          if [[ "${{ needs.find_and_validate_changes.outputs.latest_release_ref_is_tag }}" == "true" ]]; then
+            MAJOR_VERSION_OLD="$(echo '${{ needs.find_and_validate_changes.outputs.latest_release_ref }}' | cut -d'.' -f1)"
+            echo "Old major version: $MAJOR_VERSION_OLD"
+
+            if [[ "$MAJOR_VERSION_OLD" == "$MAJOR_VERSION_NEW" ]]; then
+              echo "::notice::Latest release major version and new major version are the same, so use same major version and just increment minor version"
+              MINOR_VERSION_OLD="$(echo '${{ needs.find_and_validate_changes.outputs.latest_release_ref }}' | cut -d'.' -f2)"
+              echo "Old minor version: $MINOR_VERSION_OLD"
+
+              MINOR_VERSION_NEW="$MINOR_VERSION_OLD"
+              (( MINOR_VERSION_NEW++ )) || true
+
+              NEW_VERSION="${MAJOR_VERSION_OLD}.${MINOR_VERSION_NEW}"
+            else
+              echo "::notice::Latest release major version and new major version are different. Old: [$MAJOR_VERSION_OLD], new: [$MAJOR_VERSION_NEW], so use new major version and zero minor"
+              NEW_VERSION="${MAJOR_VERSION_NEW}.0"
+            fi
+          else
+            echo "Latest release is not a tag (no releases found), so use new major version and zero minor"
+            NEW_VERSION="${MAJOR_VERSION_NEW}.0"
+          fi
+
+          echo "::notice::New version: $NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Format release notes
+        id: format_release_notes
+        env:
+          ISSUE_REL_NOTES_FILE: issue_rel_notes.json
+        run: |
+          cat << 'EOF' > "$ISSUE_REL_NOTES_FILE"
+          ${{ needs.find_and_validate_changes.outputs.issue_rel_notes_json }}
+          EOF
+
+          {
+            echo 'release_notes_body<<EOF'
+            echo "What's Changed"
+            while read ISSUE_RELEASE_NOTES
+            do
+              echo "* $ISSUE_RELEASE_NOTES"
+            done < <(cat "$ISSUE_REL_NOTES_FILE" | jq -r 'to_entries[] | select(.key | startswith("issue_rel_notes_")) | .value')
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure Git
+        run: |
+          git config --global --replace-all user.name "$GIT_USERNAME"
+          git config --global --replace-all user.email "$GIT_EMAIL"
+
+      - name: Create tag
+        run: |
+          git tag -a '${{ steps.get_new_version.outputs.new_version }}' -m 'Release: ${{ steps.get_new_version.outputs.new_version }}'
+          git push --tags origin
+
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.get_new_version.outputs.new_version }}
+          body: ${{ steps.format_release_notes.outputs.release_notes_body }}

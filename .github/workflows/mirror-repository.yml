@@ -1,0 +1,122 @@
+name: Mirror repository
+
+# Required secrets:
+# OV_SOURCE_REPOSITORY_PAT_READ_REPO - Personal access token, that can be used to access source private repository
+# OV_MIRROR_REPOSITORY_PAT_WRITE_REPO - Personal access token, that can be used to write to mirror repository
+# (it should have 'contents' write and also 'workflow' write permission to overwrite .github/actions/*.yml files)
+
+# Required variables:
+# OV_SOURCE_ORGANIZATION - Organization of source repositories
+
+on:
+  workflow_dispatch:
+#  Uncomment to automatically sync the repository on schedule
+#  schedule:
+#    - cron: "0 0 * * *"
+
+env:
+  GIT_USERNAME: 'ov-automation'
+  GIT_EMAIL: 'github-actions@github.com'
+  OLD_REPOSITORY_DIR_NAME: old-repository.git
+
+jobs:
+  mirror_repository:
+    name: Mirror repository
+    runs-on: ubuntu-latest
+    if: vars.OV_SOURCE_ORGANIZATION != null && vars.OV_SOURCE_ORGANIZATION != ''
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global --replace-all user.name "$GIT_USERNAME"
+          git config --global --replace-all user.email "$GIT_EMAIL"
+
+      - name: Clone source repository
+        run: git clone --bare 'https://${{ secrets.OV_SOURCE_REPOSITORY_PAT_READ_REPO }}@github.com/${{ vars.OV_SOURCE_ORGANIZATION }}/${{ github.event.repository.name }}.git' "$OLD_REPOSITORY_DIR_NAME"
+
+      - name: Update mirror repository
+        run: |
+          cd "$OLD_REPOSITORY_DIR_NAME"
+          git push --mirror 'https://token:${{ secrets.OV_MIRROR_REPOSITORY_PAT_WRITE_REPO }}@github.com/${{ github.repository }}.git'
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: |
+          echo 'PyGithub == 2.3.0' > requirements.txt
+          pip install -r requirements.txt
+
+      - name: Update releases
+        run: |
+          python - << EOF
+          from github import Auth
+          from github import Github
+          from github import GitRelease
+
+
+          def format_release_name(release: GitRelease) -> str:
+              return f'{release.tag_name} ({release.title})'
+
+
+          source_repository_auth = Auth.Token('${{ secrets.OV_SOURCE_REPOSITORY_PAT_READ_REPO }}')
+          source_github = Github(auth=source_repository_auth)
+          source_repository = source_github.get_repo('${{ vars.OV_SOURCE_ORGANIZATION }}/${{ github.event.repository.name }}')
+          source_releases = list(source_repository.get_releases())
+          source_release_names = list(map(format_release_name, source_releases))
+          print('Source releases:', ', '.join(source_release_names))
+
+          mirror_repository_auth = Auth.Token('${{ secrets.OV_MIRROR_REPOSITORY_PAT_WRITE_REPO }}')
+          mirror_github = Github(auth=mirror_repository_auth)
+          mirror_repository = mirror_github.get_repo('${{ github.repository }}')
+          mirror_releases = list(mirror_repository.get_releases())
+          mirror_release_names = list(map(format_release_name, mirror_releases))
+          print('Mirror releases:', ', '.join(mirror_release_names))
+
+
+          def is_release_changed(release: GitRelease, found_mirror_release: GitRelease) -> bool:
+              return (release.title != found_mirror_release.title
+                      or release.body != found_mirror_release.body
+                      or release.draft != found_mirror_release.draft
+                      or release.prerelease != found_mirror_release.prerelease)
+
+
+          def update_mirror_release_if_necessary(release: GitRelease):
+              release_name = format_release_name(release)
+              found_mirror_release = next(item for item in mirror_releases if format_release_name(item) == release_name)
+
+              if found_mirror_release is not None and is_release_changed(release, found_mirror_release):
+                  print(f'Updating release [{release_name}], release ID=[{found_mirror_release.id}]')
+                  found_mirror_release.update_release(name=release.title,
+                                                      message=release.body,
+                                                      draft=release.draft,
+                                                      prerelease=release.prerelease)
+
+
+          # Delete releases
+          for mirror_release in mirror_releases:
+              if format_release_name(mirror_release) in source_release_names:
+                  continue
+
+              print(f'Deleting release with tag=[{mirror_release.tag_name}], release ID=[{mirror_release.id}]')
+              mirror_release.delete_release()
+
+          # Create releases
+          for source_release in sorted(source_releases, key=lambda release: (release.created_at, release.published_at)):
+              if format_release_name(source_release) in mirror_release_names:
+                  update_mirror_release_if_necessary(source_release)
+                  continue
+
+              print(f'Creating release with tag=[{source_release.tag_name}]')
+              mirror_repository.create_git_release(tag=source_release.tag_name,
+                                                   name=source_release.title,
+                                                   message=source_release.body,
+                                                   draft=source_release.draft,
+                                                   prerelease=source_release.prerelease,
+                                                   generate_release_notes=False,
+                                                   target_commitish=source_release.target_commitish)
+
+          source_github.close()
+          mirror_github.close()
+          EOF

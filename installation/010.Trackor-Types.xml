@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- It makes sense to start the installation with trackor types.
+     We recommend splitting components into separate files by type and naming them accordingly, ie:
+     Menu.xml, Security-Roles.xml, Rules.xml, Imports.xml, etc.
+     
+     Make sure to add new trackor types to the tree by adjusting the import mode in XML:
+     <XITOR_TYPES impMode="IMPORT_RELATIONS">
+
+     Other modes supported for Trackor Types: DONT_ASSIGN_TO_TREE, ASSIGN_TO_ROOT, IMPORT_RELATIONS, IMPORT_RELATIONS_ONLY
+
+     Additionally, import modes are supported for
+     - Config Groups(Tabs): DONT_ADD_FIELDS_IF_TAB_NOT_EMPTY, ADD_FIELDS_IF_TAB_NOT_EMPTY, REMOVE_DYN_FIELDS_BEFORE_IMP
+     - Fields: THROW_IF_EXIST, SKIP_IF_EXIST, UPDATE_IF_EXIST
+     - Menu Applications: UNASSING_ALL_MENU, MERGE_APP_ITEMS
+     - Imports: USE_EXIST, THROW_IF_EXIST
+     - Reports: USE_EXIST, THROW_IF_EXIST
+
+     Currently, module dependencies are not supported (i.e. one module can't require another one to be installed).
+     To archive this capability module developer should provide a list of dependencies in the module`s readme and rely 
+     on the existence of certain entities (Trackor Types, Fields, etc).
+     Another approach, which works with generic parts of config (for example "Users" Trackor Type), is to include 
+     minimally required entities to this module. Make sure, if "Users" Trackor Type already exists, 
+     installation of the module will not break it, at maximum, we can add new fields and relations.
+ -->
+<COMPONENTS>
+    <XITOR_TYPES impMode="IMPORT_RELATIONS">
+        <XITOR_TYPES_ITEM>
+        </XITOR_TYPES_ITEM>
+    </XITOR_TYPES>
+</COMPONENTS>
